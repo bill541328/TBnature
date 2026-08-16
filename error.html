@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>系統忙碌中｜虎甲自然 2026</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/img/logo-mark.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/css/main.css">
+</head>
+<body>
+  <main class="error-page">
+    <h1 class="error-page__title" data-error-title style="font-size:42px;">系統忙碌中</h1>
+    <p class="error-page__hint" data-error-hint>網站資料載入發生問題，請稍後重新整理。如持續無法載入，歡迎回到 LINE詢問。</p>
+    <div class="error-page__actions">
+      <button onclick="location.reload()" class="btn btn--primary btn--lg btn--block">重新整理</button>
+      <a id="line-cta" href="https://lin.ee/TPOEska" target="_blank" rel="noopener" class="btn btn--secondary btn--lg btn--block">回到 LINE</a>
+      <a href="index.html" class="btn btn--secondary btn--lg btn--block">回首頁</a>
+    </div>
+  </main>
+
+  <script src="assets/js/shared.js"></script>
+  <script>
+    (function(){
+      const params = new URLSearchParams(location.search);
+      const reason = params.get('reason') || '';
+      const titleEl = document.querySelector('[data-error-title]');
+      const hintEl = document.querySelector('[data-error-hint]');
+      if (reason === 'csv') {
+        titleEl.textContent = '資料載入發生問題';
+        hintEl.textContent = '網站內容暫時無法載入，可能是維護中或網路波動。請稍後重新整理，或回到 LINE詢問。';
+      }
+      // 不依賴 CSV 載入，避免錯誤頁再失敗
+      TB.injectHeader({});
+      TB.injectFooter({});
+    })();
+  </script>
+</body>
+</html>
