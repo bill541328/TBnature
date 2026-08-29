@@ -2,25 +2,65 @@
 (async function(){
   'use strict';
 
+  let data;
   try {
-    const data = await TBCSV.loadAll();
-    TB.injectHeader(data.config);
-    TB.injectFooter(data.config);
-    TB.applyText(data.config);
-
-    bindLineCta(data.config);
-    renderSeriesAnchors(data.series);
-    renderSeriesSections(data);
-    renderCalendar(data);
-    TB.handleAnchorScroll();
+    data = await TBCSV.load('courses');
   } catch (err) {
     TBCSV.handleLoadError(err);
+    return;
+  }
+
+  // 單一區塊渲染失敗不該讓整頁跳錯誤頁
+  function step(name, fn) {
+    try { fn(); } catch (e) { console.error('[Render Failed]', name, e); }
+  }
+
+  step('header',   () => TB.injectHeader(data.config));
+  step('footer',   () => TB.injectFooter(data.config));
+  step('text',     () => TB.applyText(data.config));
+  step('lineCta',  () => bindLineCta(data.config));
+  step('anchors',  () => renderSeriesAnchors(data.series));
+  step('sections', () => renderSeriesSections(data));
+  step('calendar', () => renderCalendar(data));
+  step('scroll',   () => TB.handleAnchorScroll());
+
+  // ----------------------------------------------------------
+  // series 索引：series_id 與 name 都能對到同一個 series_id，
+  // 讓 classes.series 填哪一種都成立
+  // ----------------------------------------------------------
+  function buildSeriesIndex(seriesRows) {
+    const idx = {};
+    (seriesRows || []).forEach(s => {
+      if (s.series_id) idx[s.series_id] = s.series_id;
+      if (s.name) idx[s.name] = s.series_id || s.name;
+    });
+    return idx;
+  }
+
+  // ----------------------------------------------------------
+  // time_period 代號 → 顯示文字
+  // 查不到就原樣輸出代號，讓缺漏立刻看得見。
+  // ----------------------------------------------------------
+  function timePeriodLabel(code) {
+    if (!code) return '';
+    const row = (data.time_periods || []).find(r => r.code === code);
+    if (row && row.label) return row.label;
+    console.warn('[Missing Label] time_periods 查無代號:', code);
+    return code;
+  }
+
+  // 星期由日期計算，不讀試算表欄位
+  function weekdayText(d) {
+    return TB.weekdayOf(d.date) || d.weekday || '';
+  }
+
+  function byDate(a, b) {
+    return String(a.date || '').localeCompare(String(b.date || ''));
   }
 
   function bindLineCta(config) {
-    if (!config.line_oa_url) return;
     const line = document.getElementById('line-cta');
-    if (line) line.href = config.line_oa_url;
+    if (line && config.line_oa_url) line.href = TB.safeUrl(config.line_oa_url);
   }
 
   // ----------------------------------------------------------
@@ -29,7 +69,7 @@
   function renderSeriesAnchors(series) {
     const container = document.querySelector('[data-series-anchors]');
     if (!container || !series) return;
-    const sorted = series.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = series.slice().sort(TB.byOrder());
     container.innerHTML = sorted.map(s => `
       <a href="#${TB.escapeHTML(s.series_id)}" class="btn btn--secondary btn--lg">${TB.escapeHTML(s.name)}</a>
     `).join('');
@@ -42,21 +82,25 @@
     const container = document.querySelector('[data-series-sections]');
     if (!container) return;
 
-    const seriesSorted = (data.series || []).slice()
-      .sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const seriesIdx = buildSeriesIndex(data.series);
+    const seriesSorted = (data.series || []).slice().sort(TB.byOrder());
 
     const classesBySeries = {};
-    (data.classes || []).slice()
-      .sort((a, b) => Number(a.display_order) - Number(b.display_order))
+    (data.classes || []).slice().sort(TB.byOrder())
       .forEach(c => {
-        if (!classesBySeries[c.series]) classesBySeries[c.series] = [];
-        classesBySeries[c.series].push(c);
+        const key = seriesIdx[c.series];
+        if (!key) {
+          console.warn('[Orphan Class] classes.series 對不到 series 表:', c.class_id, c.series);
+          return;
+        }
+        if (!classesBySeries[key]) classesBySeries[key] = [];
+        classesBySeries[key].push(c);
       });
 
     const emptyLabel = data.config.class_list_empty || '本系列暫無班級';
 
     container.innerHTML = seriesSorted.map(s => {
-      const list = classesBySeries[s.name] || [];
+      const list = classesBySeries[s.series_id] || [];
       const listHTML = list.length === 0
         ? `<p class="muted">${TB.escapeHTML(emptyLabel)}</p>`
         : list.map(c => renderClassCard(c, data)).join('');
@@ -66,7 +110,7 @@
             <h2>${TB.escapeHTML(s.title)}</h2>
             <p>${TB.escapeHTML(s.tagline)}</p>
           </div>
-          <div class="stack" data-series-classes="${TB.escapeHTML(s.name)}">${listHTML}</div>
+          <div class="stack" data-series-classes="${TB.escapeHTML(s.series_id)}">${listHTML}</div>
         </section>
       `;
     }).join('');
@@ -109,17 +153,21 @@
   function openClassModal(c, data) {
     const dates = (data.dates || [])
       .filter(d => d.class_id === c.class_id)
-      .sort((a, b) => a.date.localeCompare(b.date));
+      .sort(byDate);
 
     const dateEmpty = data.config.class_dates_empty || '尚未公布日期';
     const dateListHTML = dates.length === 0
       ? `<li class="muted">${TB.escapeHTML(dateEmpty)}</li>`
-      : dates.map(d => `
+      : dates.map(d => {
+          const period = timePeriodLabel(d.time_period);
+          const note = d.notes || '';
+          return `
           <li>
-            <span class="calendar__date">${TB.formatDate(d.date)}（${TB.escapeHTML(d.weekday)}）</span>
-            <span>第 ${TB.escapeHTML(d.session_no)} 堂${d.notes ? ' · <span class="date-list__note">' + TB.escapeHTML(d.notes) + '</span>' : ''}</span>
+            <span class="calendar__date">${TB.formatDate(d.date)}（${TB.escapeHTML(weekdayText(d))}）</span>
+            <span>第 ${TB.escapeHTML(d.session_no)} 堂${period ? ' · ' + TB.escapeHTML(period) : ''}${note ? ' · <span class="date-list__note">' + TB.escapeHTML(note) + '</span>' : ''}</span>
           </li>
-        `).join('');
+        `;
+        }).join('');
 
     const expHint = lookupExpHint(c.experience_requirement, data.exp_hints);
     const priceDisplay = TB.formatPrice(c.price) + (c.price_unit ? TB.escapeHTML(c.price_unit) : '');
@@ -132,8 +180,9 @@
          </details>`
       : '';
 
-    const registerBlock = data.config.register_url
-      ? `<a href="${TB.escapeHTML(data.config.register_url)}" target="_blank" rel="noopener"
+    const registerUrl = TB.safeUrl(data.config.register_url);
+    const registerBlock = (data.config.register_url && registerUrl !== '#')
+      ? `<a href="${TB.escapeHTML(registerUrl)}" target="_blank" rel="noopener"
             class="btn btn--accent btn--lg btn--block" style="margin-top:24px;">
            ${TB.escapeHTML(data.config.class_modal_register_btn || '報名此班')}
          </a>`
@@ -181,14 +230,20 @@
     const classMap = {};
     (data.classes || []).forEach(c => { classMap[c.class_id] = c; });
 
+    // 查無班級的日期不渲染。
+    const rows = (data.dates || []).filter(d => {
+      if (classMap[d.class_id]) return true;
+      console.warn('[Orphan Date] course_dates.class_id 查無班級:', d.class_id, d.date);
+      return false;
+    });
+
     const grouped = {};
-    (data.dates || []).slice()
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .forEach(d => {
-        const key = (d.date || '').slice(0, 7);
-        if (!grouped[key]) grouped[key] = [];
-        grouped[key].push(d);
-      });
+    rows.slice().sort(byDate).forEach(d => {
+      const key = String(d.date || '').slice(0, 7);
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(d);
+    });
 
     const months = Object.keys(grouped).sort();
     if (months.length === 0) {
@@ -203,13 +258,15 @@
       const [y, mm] = m.split('-');
       const monthLabel = `${y} 年 ${parseInt(mm, 10)} 月`;
       const list = grouped[m].map(d => {
-        const cls = classMap[d.class_id];
-        const className = cls ? cls.name : d.class_id;
-        const noteHTML = d.notes ? `<span class="date-list__note">${TB.escapeHTML(d.notes)}</span>` : '';
+        const className = classMap[d.class_id].name;
+        const period = timePeriodLabel(d.time_period);
+        const note = d.notes || '';
+        const noteHTML = note ? `<span class="date-list__note">${TB.escapeHTML(note)}</span>` : '';
+        const periodHTML = period ? ` · ${TB.escapeHTML(period)}` : '';
         return `
           <li>
-            <span class="calendar__date">${TB.formatDate(d.date)}（${TB.escapeHTML(d.weekday)}）</span>
-            <span class="calendar__class">${TB.escapeHTML(className)} 第 ${TB.escapeHTML(d.session_no)} ${TB.escapeHTML(sessionLabel)} ${noteHTML}</span>
+            <span class="calendar__date">${TB.formatDate(d.date)}（${TB.escapeHTML(weekdayText(d))}）</span>
+            <span class="calendar__class">${TB.escapeHTML(className)} 第 ${TB.escapeHTML(d.session_no)} ${TB.escapeHTML(sessionLabel)}${periodHTML} ${noteHTML}</span>
           </li>
         `;
       }).join('');
