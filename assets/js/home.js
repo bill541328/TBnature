@@ -2,20 +2,26 @@
 (async function(){
   'use strict';
 
+  let data;
   try {
-    const data = await TBCSV.loadAll();
-    TB.injectHeader(data.config);
-    TB.injectFooter(data.config);
-    TB.applyText(data.config);
-
-    renderAbout(data.about, data.config);
-    renderSeriesPreview(data.series, data.config);
-    renderKeywords(data.keywords);
-    bindKeywordToggle();
-    bindRegisterCta(data.config);
+    data = await TBCSV.load('home');
   } catch (err) {
     TBCSV.handleLoadError(err);
+    return;
   }
+
+  // 單一區塊渲染失敗不該讓整頁跳錯誤頁
+  function step(name, fn) {
+    try { fn(); } catch (e) { console.error('[Render Failed]', name, e); }
+  }
+
+  step('header',   () => TB.injectHeader(data.config));
+  step('footer',   () => TB.injectFooter(data.config));
+  step('text',     () => TB.applyText(data.config));
+  step('about',    () => renderAbout(data.about, data.config));
+  step('series',   () => renderSeriesPreview(data.series, data.config));
+  step('keywords', () => { renderKeywords(data.keywords); bindKeywordToggle(); });
+  step('register', () => bindRegisterCta(data.config));
 
   // ----------------------------------------------------------
   // 品牌故事：lead / muted 常顯；body / emphasis 收進「閱讀完整故事」
@@ -28,7 +34,7 @@
       return;
     }
 
-    const sorted = rows.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = rows.slice().sort(TB.byOrder());
     const summaryLabel = (config && config.home_about_more) || '閱讀完整故事';
 
     const visibleHTML = [];
@@ -75,7 +81,7 @@
       return;
     }
     const cta = (config && config.home_series_cta) || '看班級 →';
-    const sorted = rows.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = rows.slice().sort(TB.byOrder());
     container.innerHTML = sorted.map(s => `
       <a href="courses.html#${TB.escapeHTML(s.series_id)}" class="series-card">
         <h3 class="series-card__title">${TB.escapeHTML(s.title)}</h3>
@@ -95,7 +101,7 @@
       container.innerHTML = '';
       return;
     }
-    const sorted = rows.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = rows.slice().sort(TB.byOrder());
     container.innerHTML = sorted.map(k => `
       <button class="keyword" type="button" aria-expanded="false">
         <span class="keyword__name">${TB.escapeHTML(k.name)}</span>
@@ -114,9 +120,10 @@
   }
 
   function bindRegisterCta(config) {
-    if (!config.register_url) return;
+    const url = TB.safeUrl(config.register_url);
+    if (!config.register_url || url === '#') return;
     document.querySelectorAll('#register-cta-hero, #register-cta-home').forEach(el => {
-      el.href = config.register_url;
+      el.href = url;
     });
   }
 })();
