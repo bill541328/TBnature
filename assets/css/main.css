@@ -170,17 +170,21 @@ p { margin: 0 0 var(--sp-md); }
 }
 .site-header__logo:hover { text-decoration: none; }
 .site-header__logo-mark {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  object-fit: cover;
+  /* 透明去背 PNG，不再套圓形裁切 */
+  height: 40px;
+  width: auto;
   flex-shrink: 0;
   display: block;
 }
-.site-header__logo-text {
-  font-size: 28px;
-  color: var(--c-primary-dark);
-  letter-spacing: 0.04em;
+.site-header__logo-word {
+  height: 30px;
+  width: auto;
+  flex-shrink: 0;
+  display: block;
+}
+@media (min-width: 768px) {
+  .site-header__logo-mark { height: 44px; }
+  .site-header__logo-word { height: 34px; }
 }
 .site-header__nav {
   display: none;
