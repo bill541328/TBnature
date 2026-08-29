@@ -43,62 +43,120 @@
   }
 
   // ============================================================
+  // sheet 清單
+  //   ALL_SHEETS  ── 系統認得的全部資料表
+  //   PAGE_SHEETS ── 各頁實際需要的表
+  // ============================================================
+  const ALL_SHEETS = [
+    'config', 'classes', 'course_dates', 'faqs', 'series',
+    'keywords', 'about', 'refund', 'privacy', 'exp_hints', 'time_periods',
+  ];
+
+  // 新增一張 sheet 的步驟：
+  //   1. 加進 ALL_SHEETS
+  //   2. 加進需要它的頁面（PAGE_SHEETS），不需要的頁面就不會去抓
+  //   3. 在該頁的 js 裡讀 data.<sheet 名> 並寫渲染邏輯
+  //   ※ 只是查表用的對照表（code/label 之類）做到第 2 步就能用了
+  const PAGE_SHEETS = {
+    home:    ['config', 'about', 'series', 'keywords'],
+    courses: ['config', 'classes', 'course_dates', 'series', 'exp_hints', 'time_periods'],
+    info:    ['config', 'faqs', 'refund', 'privacy'],
+  };
+
+  // 選填表：不存在也不算致命錯誤。目前無。
+  const OPTIONAL_SHEETS = [];
+
+  // ============================================================
   // 來源路由：sheet 名 → URL
+  //   headers=1 為必要參數。不帶時 gviz 會自行推斷表頭列數，
+  //   一旦某欄前後列的儲存格型別不一致，會把資料列誤判為表頭。
   // ============================================================
   function sourceUrl(sheetName) {
     const sid = (global.SITE_CONFIG && global.SITE_CONFIG.GOOGLE_SHEETS_ID || '').trim();
     if (sid) {
       return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sid)}/gviz/tq` +
-             `?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+             `?tqx=out:csv&headers=1&sheet=${encodeURIComponent(sheetName)}`;
     }
+    // 離線備援：Google 無法存取時，可手動把各表匯出成 CSV 放進 data/，
+    // 並清空 site-config.js 的 GOOGLE_SHEETS_ID。
     return `data/${sheetName}.csv`;
   }
 
-  async function loadSheet(sheetName) {
-    const url = sourceUrl(sheetName);
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`Failed to load ${sheetName}: ${res.status}`);
-    const text = await res.text();
-    return parseCSV(text);
+  // 同一次頁面載入內去重（多個 render 共用同一張表時不重複抓）
+  const inflight = new Map();
+
+  function loadSheet(sheetName) {
+    if (inflight.has(sheetName)) return inflight.get(sheetName);
+    const p = (async () => {
+      const res = await fetch(sourceUrl(sheetName));
+      if (!res.ok) throw new Error(`${sheetName}: HTTP ${res.status}`);
+      return parseCSV(await res.text());
+    })();
+    inflight.set(sheetName, p);
+    return p;
   }
 
   // ============================================================
-  // 載入全部資料（10 個 sheet 並行）
+  // 載入資料
+  //   單張表失敗 → 該表視為空陣列，其餘照常渲染（降級，不是陣亡）
+  //   全部表失敗 → 視為網路／權限問題，拋出讓頁面導向錯誤頁
   // ============================================================
-  const SHEETS = [
-    'config', 'classes', 'course_dates', 'faqs',
-    'series', 'keywords', 'about', 'refund', 'privacy', 'exp_hints',
-  ];
+  async function load(pageOrList) {
+    const list = Array.isArray(pageOrList)
+      ? pageOrList
+      : (PAGE_SHEETS[pageOrList] || ALL_SHEETS);
 
-  async function loadAll() {
-    const results = await Promise.all(SHEETS.map(loadSheet));
+    const settled = await Promise.allSettled(list.map(loadSheet));
+
     const byName = {};
-    SHEETS.forEach((name, idx) => { byName[name] = results[idx]; });
+    const failed = [];
+    list.forEach((name, idx) => {
+      const r = settled[idx];
+      if (r.status === 'fulfilled') {
+        byName[name] = r.value;
+      } else {
+        byName[name] = [];
+        if (OPTIONAL_SHEETS.indexOf(name) === -1) failed.push(name);
+        console.warn('[Sheet Load Failed]', name, r.reason);
+      }
+    });
 
-    // config 表轉為 { key: value } 物件
+    const required = list.filter(n => OPTIONAL_SHEETS.indexOf(n) === -1);
+    if (failed.length === required.length && required.length > 0) {
+      const err = new Error('all sheets failed');
+      err.code = 'network';
+      throw err;
+    }
+
     const config = {};
     (byName.config || []).forEach(r => { if (r.key) config[r.key] = r.value; });
 
-    return {
+    // 每一張載入的表都以「原始 sheet 名」掛在回傳物件上，
+    // 所以新增 sheet 時只需要動 ALL_SHEETS / PAGE_SHEETS，這裡不用改。
+    // 下面幾個是既有程式碼在用的別名，保留以免改壞呼叫端。
+    return Object.assign({}, byName, {
       config,
-      classes:    byName.classes    || [],
-      dates:      byName.course_dates || [],
-      faqs:       byName.faqs       || [],
-      series:     byName.series     || [],
-      keywords:   byName.keywords   || [],
-      about:      byName.about      || [],
-      refund:     byName.refund     || [],
-      privacy:    byName.privacy    || [],
-      exp_hints:  byName.exp_hints  || [],
-    };
+      failed,
+      dates: byName.course_dates || [],
+    });
   }
 
+  // 保留舊介面
+  function loadAll() { return load(ALL_SHEETS); }
+
+  // ============================================================
+  // 錯誤處理：把可辨識的原因帶進網址，錯誤頁對外仍顯示友善文案
+  // ============================================================
   function handleLoadError(err) {
     console.error('[Data Load Error]', err);
-    global.location.href = 'error.html?reason=csv';
+    const code = (err && err.code) || 'data';
+    const detail = (err && err.message ? String(err.message) : '').slice(0, 120);
+    global.location.href = 'error.html?reason=' + encodeURIComponent(code) +
+                           '&detail=' + encodeURIComponent(detail);
   }
 
   global.TBCSV = {
-    parseCSV, loadSheet, loadAll, handleLoadError, sourceUrl, SHEETS,
+    parseCSV, loadSheet, load, loadAll, handleLoadError, sourceUrl,
+    SHEETS: ALL_SHEETS, PAGE_SHEETS,
   };
 })(window);
