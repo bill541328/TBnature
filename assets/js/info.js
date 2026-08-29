@@ -2,21 +2,27 @@
 (async function(){
   'use strict';
 
+  let data;
   try {
-    const data = await TBCSV.loadAll();
-    TB.injectHeader(data.config);
-    TB.injectFooter(data.config);
-    TB.applyText(data.config);
-
-    renderFAQ(data.faqs);
-    renderRefund(data.refund);
-    renderPrivacy(data.privacy);
-    bindContacts(data.config);
-
-    TB.handleAnchorScroll();
+    data = await TBCSV.load('info');
   } catch (err) {
     TBCSV.handleLoadError(err);
+    return;
   }
+
+  // 單一區塊渲染失敗不該讓整頁跳錯誤頁
+  function step(name, fn) {
+    try { fn(); } catch (e) { console.error('[Render Failed]', name, e); }
+  }
+
+  step('header',   () => TB.injectHeader(data.config));
+  step('footer',   () => TB.injectFooter(data.config));
+  step('text',     () => TB.applyText(data.config));
+  step('faq',      () => renderFAQ(data.faqs));
+  step('refund',   () => renderRefund(data.refund));
+  step('privacy',  () => renderPrivacy(data.privacy));
+  step('contacts', () => bindContacts(data.config));
+  step('scroll',   () => TB.handleAnchorScroll());
 
   // ----------------------------------------------------------
   // FAQ Accordion
@@ -27,7 +33,7 @@
     container.innerHTML = '<div data-accordion></div>';
     const accordion = container.querySelector('[data-accordion]');
 
-    const sorted = faqs.slice().sort((a, b) => Number(a.order) - Number(b.order));
+    const sorted = faqs.slice().sort(TB.byOrder('order'));
     accordion.innerHTML = sorted.map(f => `
       <details class="accordion__item">
         <summary>
@@ -53,7 +59,7 @@
       tbody.innerHTML = '';
       return;
     }
-    const sorted = rows.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = rows.slice().sort(TB.byOrder());
     tbody.innerHTML = sorted.map(r => `
       <tr><td>${TB.escapeHTML(r.stage)}</td><td>${TB.escapeHTML(r.ratio)}</td></tr>
     `).join('');
@@ -69,7 +75,7 @@
       container.innerHTML = '';
       return;
     }
-    const sorted = rows.slice().sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    const sorted = rows.slice().sort(TB.byOrder());
     container.innerHTML = sorted.map((r, idx) => {
       const marginTop = idx === 0 ? '' : 'margin-top:24px;';
       return `
@@ -88,7 +94,7 @@
   function bindContacts(config) {
     const lineCta = document.getElementById('line-cta');
     if (lineCta) {
-      lineCta.href = config.line_oa_url || '#';
+      lineCta.href = TB.safeUrl(config.line_oa_url);
       const idEl = lineCta.querySelector('[data-line-id]');
       if (idEl && config.line_oa_id) {
         idEl.textContent = config.line_oa_id;
@@ -98,11 +104,12 @@
       }
     }
     const emailCta = document.getElementById('email-cta');
-    if (emailCta && config.contact_email) {
-      emailCta.href = 'mailto:' + config.contact_email;
+    const email = TB.safeEmail(config.contact_email);
+    if (emailCta && email) {
+      emailCta.href = 'mailto:' + email;
       const eEl = emailCta.querySelector('[data-email]');
       if (eEl) {
-        eEl.textContent = config.contact_email;
+        eEl.textContent = email;
         eEl.style.display = 'block';
         eEl.style.fontSize = '14px';
         eEl.style.opacity = '0.7';
@@ -111,7 +118,7 @@
     }
     const pdfCard = document.getElementById('pdf-card');
     if (pdfCard && config.pdf_url) {
-      pdfCard.href = config.pdf_url;
+      pdfCard.href = TB.safeUrl(config.pdf_url);
     }
   }
 })();
