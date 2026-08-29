@@ -11,19 +11,36 @@
     return 'NT$ ' + num.toLocaleString('en-US');
   }
 
+  const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+  // 純字串處理。
   function formatDate(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return d.getFullYear() + '/' + m + '/' + day;
+    const m = ISO_DATE.exec(String(iso || '').trim());
+    if (!m) return iso || '';
+    return `${m[1]}/${m[2]}/${m[3]}`;
   }
 
+  const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+
   function weekdayOf(iso) {
-    const d = new Date(iso);
+    const m = ISO_DATE.exec(String(iso || '').trim());
+    if (!m) return '';
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (isNaN(d.getTime())) return '';
-    return ['日','一','二','三','四','五','六'][d.getDay()];
+    return WEEKDAYS[d.getDay()];
+  }
+
+  // display_order 空值或非數字 → 排到最後
+  function orderOf(v) {
+    // 注意 Number('') === 0，空值不能直接丟給 Number 判斷
+    if (v == null || String(v).trim() === '') return Number.MAX_SAFE_INTEGER;
+    const n = Number(v);
+    return isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
+  }
+
+  function byOrder(field) {
+    const f = field || 'display_order';
+    return (a, b) => orderOf(a[f]) - orderOf(b[f]);
   }
 
   function escapeHTML(s) {
@@ -33,10 +50,22 @@
     }[ch]));
   }
 
+  // 試算表內容會進到 href。
+  const SAFE_SCHEME = /^(?:https?:\/\/|mailto:|tel:|\/|\.\/|#)/i;
+  function safeUrl(u) {
+    const s = String(u == null ? '' : u).trim();
+    if (!s) return '#';
+    return SAFE_SCHEME.test(s) ? s : '#';
+  }
+
+  const EMAIL_RE = /^[^\s@<>"'`?&]+@[^\s@<>"'`?&]+\.[^\s@<>"'`?&]+$/;
+  function safeEmail(e) {
+    const s = String(e == null ? '' : e).trim();
+    return EMAIL_RE.test(s) ? s : '';
+  }
+
   // ============================================================
   // applyText：把 config 表內容套到頁面上
-  //   [data-cfg="key"]    → textContent
-  //   [data-cfg-ml="key"] → innerHTML（escape 後把 \n 變 <br>）
   // 若 config 中沒有對應 key，保留 HTML 內原文字當 fallback
   // ============================================================
   function applyText(config, root) {
@@ -59,17 +88,19 @@
   }
 
   // ============================================================
-  // Header 注入（樣板用 data-cfg；applyText 會在外面負責覆寫）
+  // Header 注入
   // ============================================================
   function injectHeader(config) {
-    const lineUrl = (config && config.line_oa_url) || '#';
+    const lineUrl = safeUrl(config && config.line_oa_url);
+    // 站名改用文字 logo 圖，站名文字改掛在 alt（仍由 config.site_name 決定）
+    const siteName = (config && config.site_name) || '虎甲自然';
     const header = document.createElement('header');
     header.className = 'site-header';
     header.innerHTML = `
       <div class="site-header__inner">
-        <a href="index.html" class="site-header__logo">
-          <img src="assets/img/logo-mark.png" alt="" class="site-header__logo-mark">
-          <span class="site-header__logo-text" data-cfg="site_name">虎甲自然</span>
+        <a href="index.html" class="site-header__logo" aria-label="${escapeHTML(siteName)}">
+          <img src="assets/img/logo-head.png" alt="" class="site-header__logo-mark">
+          <img src="assets/img/logo-word.png" alt="${escapeHTML(siteName)}" class="site-header__logo-word">
         </a>
         <nav class="site-header__nav">
           <a href="index.html"           data-cfg="nav_home">企業概述</a>
@@ -88,11 +119,15 @@
   // ============================================================
   function injectFooter(config) {
     const cfg = config || {};
-    const lineUrl = cfg.line_oa_url || '#';
+    const lineUrl = safeUrl(cfg.line_oa_url);
     const lineId = cfg.line_oa_id || '';
-    const email = cfg.contact_email || '';
-    const pdfUrl = cfg.pdf_url || '#';
+    const email = safeEmail(cfg.contact_email);
+    const pdfUrl = safeUrl(cfg.pdf_url);
     const lineLabel = (cfg.footer_line_label || '回到 LINE') + (lineId ? ' ' + lineId : '');
+
+    const emailHTML = email
+      ? `<a href="mailto:${escapeHTML(email)}">${escapeHTML(email)}</a>`
+      : '';
 
     const footer = document.createElement('footer');
     footer.className = 'site-footer';
@@ -100,7 +135,7 @@
       <div class="site-footer__inner">
         <div class="site-footer__row">
           <a href="${escapeHTML(lineUrl)}" target="_blank" rel="noopener">${escapeHTML(lineLabel)}</a>
-          <a href="mailto:${escapeHTML(email)}">${escapeHTML(email)}</a>
+          ${emailHTML}
           <a href="${escapeHTML(pdfUrl)}" target="_blank" rel="noopener" data-cfg="footer_pdf_label">下載 PDF 簡章</a>
         </div>
         <div class="site-footer__copyright" data-cfg="footer_copyright">
@@ -115,17 +150,20 @@
   // 通用 Modal
   // ============================================================
   let modalEl = null;
+  let lastFocused = null;
+
   function ensureModal() {
     if (modalEl) return modalEl;
     modalEl = document.createElement('div');
     modalEl.className = 'modal';
     modalEl.setAttribute('aria-modal', 'true');
     modalEl.setAttribute('role', 'dialog');
+    modalEl.setAttribute('aria-labelledby', 'tb-modal-title');
     modalEl.innerHTML = `
       <div class="modal__sheet" role="document">
         <div class="modal__handle"></div>
         <button class="modal__close" aria-label="關閉">×</button>
-        <h2 class="modal__title" data-modal-title></h2>
+        <h2 class="modal__title" id="tb-modal-title" data-modal-title></h2>
         <div data-modal-body></div>
       </div>
     `;
@@ -135,21 +173,45 @@
     });
     modalEl.querySelector('.modal__close').addEventListener('click', closeModal);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && modalEl.hasAttribute('open')) closeModal();
+      if (!modalEl.hasAttribute('open')) return;
+      if (e.key === 'Escape') { closeModal(); return; }
+      if (e.key === 'Tab') trapFocus(e);
     });
     return modalEl;
   }
+
+  const FOCUSABLE = 'a[href], button:not([disabled]), summary, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  function trapFocus(e) {
+    const items = Array.from(modalEl.querySelectorAll(FOCUSABLE))
+      .filter(el => el.offsetParent !== null);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+
   function openModal(title, bodyHTML) {
     const m = ensureModal();
+    lastFocused = document.activeElement;
     m.querySelector('[data-modal-title]').textContent = title || '';
     m.querySelector('[data-modal-body]').innerHTML = bodyHTML || '';
     m.setAttribute('open', '');
     document.body.classList.add('modal-open');
+    const closeBtn = m.querySelector('.modal__close');
+    if (closeBtn) closeBtn.focus();
   }
+
   function closeModal() {
     if (!modalEl) return;
     modalEl.removeAttribute('open');
     document.body.classList.remove('modal-open');
+    if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+    lastFocused = null;
   }
 
   // ============================================================
@@ -168,11 +230,12 @@
   }
 
   // ============================================================
-  // anchor scroll（避開 sticky header）
+  // anchor scroll
   // ============================================================
   function handleAnchorScroll(offset) {
     if (!location.hash) return;
-    const target = document.querySelector(location.hash);
+    let target = null;
+    try { target = document.querySelector(location.hash); } catch (e) { return; }
     if (!target) return;
     setTimeout(() => {
       const y = target.getBoundingClientRect().top + window.scrollY - (offset || 72);
@@ -185,6 +248,7 @@
   // ============================================================
   global.TB = {
     formatPrice, formatDate, weekdayOf, escapeHTML,
+    safeUrl, safeEmail, orderOf, byOrder,
     applyText,
     injectHeader, injectFooter,
     openModal, closeModal,
